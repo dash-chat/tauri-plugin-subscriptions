@@ -7,7 +7,9 @@ use syn::{
 
 /// Turns a function returning `impl Stream<Item = T>` into a Tauri command
 /// that forwards the stream to the `onEvent` channel the frontend passes, and
-/// returns the subscription's resource id.
+/// returns the subscription's resource id. A function returning
+/// `Result<impl Stream<Item = T>, E>` becomes a command that fails with `E`
+/// when the stream can't be set up.
 #[proc_macro_attribute]
 pub fn subscription(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let function = parse_macro_input!(item as ItemFn);
@@ -17,7 +19,7 @@ pub fn subscription(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 fn expand(function: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
-    let item = stream_item(&function.sig.output)?;
+    let output = Output::parse(&function.sig.output)?;
     let arg_names = function
         .sig
         .inputs
@@ -36,6 +38,12 @@ fn expand(function: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
     stream_fn.vis = syn::Visibility::Inherited;
     stream_fn.attrs.clear();
 
+    let make_stream = quote!(#stream_fn_name(#(#arg_names),*)#await_stream);
+    let (item, error, stream) = match output {
+        Output::Stream { item } => (item, quote!(::std::string::String), make_stream),
+        Output::Fallible { item, error } => (item, quote!(#error), quote!(#make_stream?)),
+    };
+
     Ok(quote! {
         #stream_fn
 
@@ -44,24 +52,46 @@ fn expand(function: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
         #vis async fn #name(
             #(#inputs,)*
             on_event: ::tauri_plugin_subscriptions::Subscriber<#item, ::tauri::Wry>,
-        ) -> ::std::result::Result<::tauri::ResourceId, ::std::string::String> {
-            ::std::result::Result::Ok(on_event.subscribe(#stream_fn_name(#(#arg_names),*)#await_stream))
+        ) -> ::std::result::Result<::tauri::ResourceId, #error> {
+            ::std::result::Result::Ok(on_event.subscribe(#stream))
         }
     })
 }
 
-fn stream_item(output: &ReturnType) -> syn::Result<&Type> {
-    let error = || {
-        syn::Error::new_spanned(
-            output,
-            "a #[subscription] must return `impl Stream<Item = T>`",
-        )
-    };
-    let ReturnType::Type(_, ty) = output else {
-        return Err(error());
-    };
-    let Type::ImplTrait(impl_trait) = ty.as_ref() else {
-        return Err(error());
+enum Output<'a> {
+    Stream { item: &'a Type },
+    Fallible { item: &'a Type, error: &'a Type },
+}
+
+impl<'a> Output<'a> {
+    fn parse(output: &'a ReturnType) -> syn::Result<Self> {
+        let error = || {
+            syn::Error::new_spanned(
+                output,
+                "a #[subscription] must return `impl Stream<Item = T>` or `Result<impl Stream<Item = T>, E>`",
+            )
+        };
+        let ReturnType::Type(_, ty) = output else {
+            return Err(error());
+        };
+        if let Some(item) = stream_item(ty) {
+            return Ok(Self::Stream { item });
+        }
+        let Some([ok, error_type]) = result_types(ty) else {
+            return Err(error());
+        };
+        let item = stream_item(ok).ok_or_else(error)?;
+        Ok(Self::Fallible {
+            item,
+            error: error_type,
+        })
+    }
+}
+
+/// `T` in `impl Stream<Item = T>`.
+fn stream_item(ty: &Type) -> Option<&Type> {
+    let Type::ImplTrait(impl_trait) = ty else {
+        return None;
     };
     impl_trait
         .bounds
@@ -71,16 +101,36 @@ fn stream_item(output: &ReturnType) -> syn::Result<&Type> {
             _ => None,
         })
         .filter(|segment| segment.ident == "Stream")
-        .filter_map(|segment| match &segment.arguments {
-            PathArguments::AngleBracketed(arguments) => Some(arguments.args.iter()),
-            _ => None,
-        })
-        .flatten()
+        .flat_map(|segment| generic_arguments(&segment.arguments))
         .find_map(|argument| match argument {
             GenericArgument::AssocType(assoc) if assoc.ident == "Item" => Some(&assoc.ty),
             _ => None,
         })
-        .ok_or_else(error)
+}
+
+/// `[T, E]` in `Result<T, E>`.
+fn result_types(ty: &Type) -> Option<[&Type; 2]> {
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    let segment = path.path.segments.last()?;
+    if segment.ident != "Result" {
+        return None;
+    }
+    let mut types = generic_arguments(&segment.arguments).filter_map(|argument| match argument {
+        GenericArgument::Type(ty) => Some(ty),
+        _ => None,
+    });
+    Some([types.next()?, types.next()?])
+}
+
+fn generic_arguments(arguments: &PathArguments) -> impl Iterator<Item = &GenericArgument> {
+    match arguments {
+        PathArguments::AngleBracketed(arguments) => Some(arguments.args.iter()),
+        _ => None,
+    }
+    .into_iter()
+    .flatten()
 }
 
 fn arg_name(arg: &FnArg) -> syn::Result<&Ident> {

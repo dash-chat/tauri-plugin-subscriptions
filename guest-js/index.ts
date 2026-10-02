@@ -22,7 +22,8 @@ type SubscriptionArgs = Exclude<
 >;
 
 /** The latest value a `#[subscription]` command streams, subscribed to while
- * something reads it and closed in the backend once nothing does. */
+ * something reads it and closed in the backend once nothing does. Rejected
+ * with the command's error if the subscription can't be set up. */
 export function subscribe<T>(
 	command: string,
 	args: SubscriptionArgs = {},
@@ -32,9 +33,13 @@ export function subscribe<T>(
 			state.value = value;
 		});
 		const subscription = invoke<number>(command, { ...args, onEvent: channel });
+		subscription.catch(e => state.setError(e));
 		return () => {
 			subscription
-				.then(rid => new Resource(rid).close())
+				.then(
+					rid => new Resource(rid).close(),
+					() => {},
+				)
 				.catch(e => console.error(`Failed to close ${command}`, e));
 			unregisterChannel(channel);
 		};
