@@ -35,5 +35,6 @@ import { subscribe } from 'tauri-plugin-subscriptions';
 const counter = subscribe<number>('counter', { step: 2 }); // signalium ReactivePromise
 ```
 
-The subscription opens while something reads the reactive value and closes in
-the backend once nothing does.
+Calls with the same command and arguments share one subscription. It opens
+while something reads the reactive value and closes in the backend once nothing
+does.
