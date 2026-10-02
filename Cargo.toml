@@ -1,0 +1,22 @@
+[package]
+name = "tauri-plugin-subscriptions"
+version = "0.1.0"
+description = "Stream Rust values to the Tauri frontend, cancelled when the frontend unsubscribes or reloads"
+edition = "2021"
+exclude = ["/dist", "/guest-js", "/node_modules"]
+
+[dependencies]
+tauri = { version = "2", default-features = false }
+tauri-plugin-subscriptions-macros = { path = "macros" }
+futures = "0.3"
+serde = "1"
+tokio = { version = "1", features = ["rt"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+log = "0.4"
+
+[dev-dependencies]
+tauri = { version = "2", default-features = false, features = ["test"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[workspace]
+members = ["macros"]

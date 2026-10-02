@@ -1,0 +1,14 @@
+{
+	"compilerOptions": {
+		"strict": true,
+		"module": "es2020",
+		"moduleResolution": "bundler",
+		"target": "es2020",
+		"lib": ["ES2019", "DOM"],
+		"declaration": true,
+		"skipLibCheck": true,
+		"outDir": "./dist",
+		"rootDir": "./guest-js"
+	},
+	"include": ["guest-js/**/*.ts"]
+}
